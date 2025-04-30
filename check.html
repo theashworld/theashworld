@@ -230,7 +230,7 @@
                   .map((step) => step.name);
               }
 
-              icon.textContent = result.decision === "MATCH" ? "🟢" : result.decision === "MISMATCH" ? "🔴" : "⚪";
+              icon.textContent = result.decision === "MATCH" ? "✔" : result.decision === "MISMATCH" ? "✘" : "—";
               icon.title = traceSteps.join(" → "); // Tooltip on hover
 
               resultCell.appendChild(link);
