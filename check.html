@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Checks</title>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <style>
+      table {
+        border-collapse: collapse;
+        width: 90%;
+        margin: 20px auto;
+      }
+      th,
+      td {
+        border: 1px solid #ccc;
+        padding: 8px;
+        text-align: left;
+      }
+      input[type="text"] {
+        width: 100%;
+        box-sizing: border-box;
+      }
+      button {
+        margin: 4px;
+      }
+      .center {
+        text-align: center;
+        margin: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2 style="text-align: center;">Rule Checks</h2>
+    <table id="jsonTable"></table>
+    <div class="center">
+      <button onclick="addRow()">Add Row</button>
+      <button onclick="addColumn()">Add Column</button>
+      <button onclick="saveToFirestore()">Save</button>
+    </div>
+
+    <script>
+      const firebaseConfig = {
+        apiKey: "AIzaSyBozvOvUWciTzqULqKphaQWw8dV9zfLzCw",
+        authDomain: "neurofin-e66d6.firebaseapp.com",
+        projectId: "neurofin-e66d6",
+        storageBucket: "neurofin-e66d6.firebasestorage.app",
+        messagingSenderId: "56409578110",
+        appId: "1:56409578110:web:8c20db0877589dfdd1962f",
+      };
+
+      firebase.initializeApp(firebaseConfig);
+      const db = firebase.firestore();
+
+      let data = {
+        application: {
+          applicant: {
+            bams: true,
+            bhms: false,
+            salaried: true,
+            qualification: "DOCTOR",
+            existingCustomer: true,
+            currentPosServed: 0.15,
+            salary: 2600000,
+          },
+          req: {
+            loanValue: 600000,
+          },
+        },
+      };
+
+      function flatten(obj, prefix = "") {
+        let result = {};
+        for (const key in obj) {
+          const value = obj[key];
+          const path = prefix ? `${prefix}.${key}` : key;
+          if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+            Object.assign(result, flatten(value, path));
+          } else {
+            result[path] = value;
+          }
+        }
+        return result;
+      }
+
+      function unflatten(flat) {
+        const result = {};
+        for (const key in flat) {
+          const parts = key.split(".");
+          let ref = result;
+          for (let i = 0; i < parts.length - 1; i++) {
+            ref[parts[i]] = ref[parts[i]] || {};
+            ref = ref[parts[i]];
+          }
+          ref[parts[parts.length - 1]] = parseValue(flat[key]);
+        }
+        return result;
+      }
+
+      function parseValue(v) {
+        if (typeof v === "string") {
+          if (v === "true") return true;
+          if (v === "false") return false;
+          if (!isNaN(v.trim()) && v.trim() !== "") return parseFloat(v.trim());
+          return v;
+        }
+        return v; // fallback: keep as-is if not a string
+      }
+
+      //    let rows = [flatten(data.application)];
+      let rows = [];
+      let docRefs = []; // Firestore references
+      let docIds = []; // Firestore document IDs for checkId
+      let latestDecisionId = null;
+
+      async function fetchLatestDecisionId() {
+        const snapshot = await db.collection("decisions").orderBy("updatedAt", "desc").limit(1).get();
+
+        if (!snapshot.empty) {
+          const doc = snapshot.docs[0];
+          latestDecisionId = doc.id;
+        } else {
+          console.warn("No decision found");
+        }
+      }
+
+      async function loadFromFirestore() {
+        try {
+          const snapshot = await db.collection("checks").get();
+          rows = [];
+
+          snapshot.forEach((doc) => {
+            const data = doc.data();
+            console.log(JSON.stringify(data, null, 2));
+            if (data && data.application) {
+              rows.push(flatten(data.application));
+              docRefs.push(doc.ref);
+              docIds.push(doc.id); // capture checkId
+            }
+          });
+
+          renderTable();
+        } catch (err) {
+          console.error("Error loading from Firestore:", err);
+        }
+      }
+
+      loadFromFirestore();
+
+      function getAllFields() {
+        const fields = new Set();
+        rows.forEach((obj) => {
+          Object.keys(obj).forEach((k) => fields.add(k));
+        });
+        return Array.from(fields);
+      }
+
+      async function renderTable() {
+        const table = document.getElementById("jsonTable");
+        table.innerHTML = "";
+
+        const fields = getAllFields();
+        if (!latestDecisionId) {
+          await fetchLatestDecisionId(); // ensure it's set
+        }
+        const decisionId = latestDecisionId;
+
+        // Header row
+        const thead = table.insertRow();
+        fields.forEach((field) => (thead.insertCell().innerText = field));
+        thead.insertCell().innerText = "Actions";
+        thead.insertCell().innerText = "Result";
+
+        // Rows
+        for (let index = 0; index < rows.length; index++) {
+          const rowObj = rows[index];
+          const row = table.insertRow();
+
+          fields.forEach((field) => {
+            const cell = row.insertCell();
+            const input = document.createElement("input");
+            input.value = rowObj[field] !== undefined ? rowObj[field] : "";
+            input.onchange = () => {
+              rowObj[field] = input.value;
+            };
+            cell.appendChild(input);
+          });
+
+          // --- Actions ---
+          const actionCell = row.insertCell();
+
+          const deleteBtn = document.createElement("button");
+          deleteBtn.textContent = "Delete";
+          deleteBtn.onclick = async () => {
+            if (docRefs[index]) await docRefs[index].delete();
+            rows.splice(index, 1);
+            docRefs.splice(index, 1);
+            docIds.splice(index, 1);
+            renderTable();
+          };
+
+          const duplicateBtn = document.createElement("button");
+          duplicateBtn.textContent = "Duplicate";
+          duplicateBtn.onclick = () => {
+            rows.splice(index + 1, 0, { ...rowObj });
+            docRefs.splice(index + 1, 0, null);
+            docIds.splice(index + 1, 0, null);
+            renderTable();
+          };
+
+          actionCell.appendChild(deleteBtn);
+          actionCell.appendChild(duplicateBtn);
+
+          // --- Result Cell ---
+          const resultCell = row.insertCell();
+          if (docIds[index]) {
+            const result = await getLatestResultForCheckId(docIds[index], decisionId);
+            if (result) {
+              const link = document.createElement("a");
+              link.href = "#"; // Can be made to open modal or details later
+              link.textContent = `Result at ${new Date(result.updatedAt).toLocaleString()}`;
+
+              const icon = document.createElement("span");
+              icon.style.marginLeft = "6px";
+              let traceSteps = [];
+              const traceData = result.trace;
+              if (traceData && typeof traceData === "object") {
+                traceSteps = Object.values(traceData)
+                  .filter((step) => typeof step?.order === "number" && typeof step?.name === "string")
+                  .sort((a, b) => a.order - b.order)
+                  .map((step) => step.name);
+              }
+
+              icon.textContent = result.decision === "MATCH" ? "🟢" : result.decision === "MISMATCH" ? "🔴" : "⚪";
+              icon.title = traceSteps.join(" → "); // Tooltip on hover
+
+              resultCell.appendChild(link);
+              resultCell.appendChild(icon);
+            } else {
+              resultCell.innerText = "No result";
+            }
+          } else {
+            resultCell.innerText = "New row";
+          }
+        }
+      }
+
+      function addRow() {
+        rows.push({});
+        docRefs.push(null);
+        renderTable();
+      }
+
+      function addColumn() {
+        const field = prompt("Enter new nested key (e.g., applicant.newField):");
+        if (!field) return;
+        rows.forEach((row) => {
+          if (!(field in row)) {
+            row[field] = "";
+          }
+        });
+        renderTable();
+      }
+
+      async function getLatestResultForCheckId(checkId, decisionId) {
+        const resultsRef = db.collection("results");
+        const snapshot = await resultsRef.where("checkId", "==", checkId).where("decisionId", "==", decisionId).orderBy("updatedAt", "desc").limit(1).get();
+
+        if (snapshot.empty) return null;
+
+        const doc = snapshot.docs[0];
+        const data = doc.data();
+        console.log(
+          "snapshot.docs",
+          JSON.stringify({
+            //    decision: data?.output?.result?.data.result.decision ?? null,
+            trace: data?.output?.result?.data.trace ?? {},
+          })
+        );
+        return {
+          updatedAt: data.updatedAt?.toDate?.().toISOString?.() ?? "",
+          decision: data?.output?.result?.data.result.decision ?? null,
+          trace: data?.output?.result?.data.trace ?? {},
+          docId: doc.id,
+        };
+      }
+
+      async function saveToFirestore() {
+        try {
+          for (let i = 0; i < rows.length; i++) {
+            const fullJSON = {
+              application: unflatten(rows[i]),
+              timestamp: new Date().toISOString(),
+            };
+
+            if (docRefs[i]) {
+              await docRefs[i].set(fullJSON); // Update
+            } else {
+              const docRef = await db.collection("checks").add(fullJSON); // Create
+              docRefs[i] = docRef;
+            }
+          }
+
+          alert("All changes saved to Firestore!");
+        } catch (err) {
+          console.error("Error saving to Firestore:", err);
+          alert("Error saving to Firestore.");
+        }
+      }
+
+    </script>
+  </body>
+</html>
